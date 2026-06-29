@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>荧光定量分析工具</title>
+<meta name="theme-color" content="#2f7d63">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="荧光定量">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>荧光定量分析工具</h1>
+  <p class="subtitle">上传图片，框选区域，自动测量荧光强度</p>
+</header>
+
+<div class="tabs">
+  <button class="tab-btn active" data-tab="single">单图分析</button>
+  <button class="tab-btn" data-tab="batch">批量处理</button>
+  <button class="tab-btn" data-tab="cells">细胞计数</button>
+  <button class="tab-btn" data-tab="coloc">共定位</button>
+</div>
+
+<main>
+  <!-- ================= 单图分析 ================= -->
+  <div id="single-mode">
+    <section class="panel" id="upload-panel">
+      <div class="dropzone" id="dropzone">
+        <input type="file" id="fileInput" accept="image/*,.tif,.tiff" hidden>
+        <div class="dropzone-inner">
+          <p class="dz-title">拖拽图片到此处，或点击选择</p>
+          <p class="dz-hint">支持 PNG / JPG / TIFF 等常见格式</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="workspace" hidden>
+      <div class="toolbar">
+        <div class="tool-group">
+          <label>测量通道</label>
+          <select id="channelSelect">
+            <option value="gray">灰度（亮度）</option>
+            <option value="r">红色 (R)</option>
+            <option value="g" selected>绿色 (G)</option>
+            <option value="b">蓝色 (B)</option>
+          </select>
+        </div>
+
+        <div class="tool-group">
+          <label>选区模式</label>
+          <div class="btn-row">
+            <button class="mode-btn active" data-mode="measure">测量区</button>
+            <button class="mode-btn" data-mode="background">背景区</button>
+          </div>
+        </div>
+
+        <div class="tool-group">
+          <label>操作</label>
+          <div class="btn-row">
+            <button id="undoBtn" class="ghost">撤销选区</button>
+            <button id="clearBtn" class="ghost">清空全部</button>
+            <button id="newImageBtn" class="ghost">换图</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 精确选区（标准化）-->
+      <div class="fixed-roi">
+        <label class="fixed-roi-title">精确选区（标准化）</label>
+        <div class="fixed-inputs">
+          <span>X<input type="number" id="fx" value="0" min="0"></span>
+          <span>Y<input type="number" id="fy" value="0" min="0"></span>
+          <span>宽<input type="number" id="fw" value="50" min="1"></span>
+          <span>高<input type="number" id="fh" value="50" min="1"></span>
+          <button id="addFixedMeasure">按坐标加测量区</button>
+          <button id="addFixedBg" class="ghost">按坐标设背景区</button>
+        </div>
+        <label class="checkbox-row">
+          <input type="checkbox" id="fixedSizeMode">
+          固定大小点击模式：在图上点一下，就以该点为中心放置上面「宽×高」的选区
+        </label>
+      </div>
+
+      <div class="canvas-wrap">
+        <canvas id="canvas"></canvas>
+      </div>
+
+      <div class="results">
+        <div class="results-header">
+          <h2>测量结果</h2>
+          <div class="btn-row">
+            <button id="exportBtn" class="ghost">导出 CSV</button>
+          </div>
+        </div>
+        <div class="bg-info" id="bgInfo">背景：未设置（结果未做背景扣除）</div>
+        <div class="table-wrap">
+          <table id="resultTable">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>位置·尺寸</th>
+                <th>面积<br><span>(像素)</span></th>
+                <th>平均强度<br><span>Mean</span></th>
+                <th>最小</th>
+                <th>最大</th>
+                <th>积分密度<br><span>IntDen</span></th>
+                <th>背景校正<br><span>CTCF</span></th>
+              </tr>
+            </thead>
+            <tbody id="resultBody"></tbody>
+          </table>
+        </div>
+        <p class="formula-note">
+          IntDen = 面积 × 平均强度（区域总荧光）。
+          CTCF = IntDen − 面积 × 背景平均强度（扣除背景后的总荧光）。
+        </p>
+      </div>
+    </section>
+  </div>
+
+  <!-- ================= 批量处理 ================= -->
+  <div id="batch-mode" hidden>
+    <section class="panel">
+      <h2 class="section-title">第一步：确认选区</h2>
+      <div class="roi-summary" id="roiSummary"></div>
+    </section>
+
+    <section class="panel">
+      <h2 class="section-title">第二步：添加图片</h2>
+      <div class="dropzone small" id="batchDrop">
+        <input type="file" id="batchInput" accept="image/*,.tif,.tiff" multiple hidden>
+        <div class="dropzone-inner">
+          <p class="dz-title">拖拽多张图片到此处，或点击选择</p>
+          <p class="dz-hint">可一次选择多张，相同坐标的选区会应用到每张图</p>
+        </div>
+      </div>
+      <div class="batch-file-list" id="batchFileList">
+        <p class="muted-text">尚未添加图片</p>
+      </div>
+      <div class="btn-row" style="margin-top:12px">
+        <button id="runBatch">运行批量测量</button>
+        <button id="batchClearFiles" class="ghost">清空图片</button>
+        <button id="batchExport" class="ghost">导出 CSV</button>
+      </div>
+      <div class="batch-progress" id="batchProgress"></div>
+    </section>
+
+    <section class="panel">
+      <h2 class="section-title">批量结果</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>文件名</th>
+              <th>测量区</th>
+              <th>位置·尺寸</th>
+              <th>面积</th>
+              <th>平均强度</th>
+              <th>最小</th>
+              <th>最大</th>
+              <th>积分密度</th>
+              <th>CTCF</th>
+            </tr>
+          </thead>
+          <tbody id="batchResultBody">
+            <tr class="empty-row"><td colspan="9">运行后显示结果</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <!-- ================= 细胞计数 ================= -->
+  <div id="cells-mode" hidden>
+    <section class="panel">
+      <h2 class="section-title">细胞计数（类圆形 + 外环荧光）</h2>
+      <p id="cellNoImage" class="muted-text">请先到「单图分析」加载一张图片，这里会使用同一张图。</p>
+
+      <div class="fixed-roi">
+        <div class="fixed-inputs">
+          <span>通道
+            <select id="cellChannel">
+              <option value="gray">灰度</option>
+              <option value="r">红 R</option>
+              <option value="g" selected>绿 G</option>
+              <option value="b">蓝 B</option>
+            </select>
+          </span>
+          <span>检测方法
+            <select id="cellMethod">
+              <option value="hough" selected>霍夫圆检测 (OpenCV)</option>
+              <option value="contour">连通域填充（旧）</option>
+            </select>
+          </span>
+        </div>
+
+        <!-- 霍夫圆参数 -->
+        <div class="fixed-inputs method-hough">
+          <span>最小半径<input type="number" id="houghMinR" value="8" min="1"></span>
+          <span>最大半径<input type="number" id="houghMaxR" value="40" min="1"></span>
+          <span>圆心最小间距<input type="number" id="houghMinDist" value="20" min="1"></span>
+          <span>灵敏度<input type="number" id="houghParam2" value="30" min="1"></span>
+          <span>边缘阈值<input type="number" id="houghParam1" value="100" min="1"></span>
+          <span>模糊<input type="number" id="houghBlur" value="3" min="1" max="15"></span>
+        </div>
+
+        <!-- 连通域参数 -->
+        <div class="fixed-inputs method-contour" hidden>
+          <span>最小面积<input type="number" id="cellMinArea" value="30" min="1"></span>
+          <span>最大面积<input type="number" id="cellMaxArea" value="5000" min="1"></span>
+          <span>环闭合强度<input type="number" id="cellClose" value="1" min="0" max="3"></span>
+        </div>
+        <label class="checkbox-row method-contour" hidden>
+          <input type="checkbox" id="cellAuto" checked>
+          自动阈值（Otsu）。取消勾选可手动调阈值：
+          <input type="range" id="cellThreshold" min="0" max="255" value="60" disabled>
+          <span id="cellThVal">60</span>
+        </label>
+        <label class="checkbox-row method-contour" hidden>
+          <input type="checkbox" id="cellRoundness" checked>
+          只保留近似圆形的对象（过滤狭长/不规则杂质）
+        </label>
+
+        <div class="btn-row" style="margin-top:12px">
+          <button id="runCellCount">开始计数</button>
+          <button id="cellExport" class="ghost">导出 CSV</button>
+        </div>
+        <div id="cellOpencvStatus" class="batch-progress"></div>
+      </div>
+
+      <div class="canvas-wrap">
+        <canvas id="cellCanvas" hidden></canvas>
+      </div>
+      <div class="bg-info" id="cellResult" style="margin-top:12px">尚未运行</div>
+      <p class="formula-note method-hough">
+        霍夫圆检测：直接在图中寻找圆形轮廓，对环状荧光和有缺口的环都比较鲁棒。
+        先设好细胞的「最小/最大半径」（像素）。检不到圆就调小「灵敏度」；
+        误检太多（把噪声当圆）就调大「灵敏度」。「圆心最小间距」防止一个细胞被重复计数。
+      </p>
+      <p class="formula-note method-contour" hidden>
+        连通域填充：先按阈值取出亮环，闭合缺口后填实成圆，统计连通区域个数。
+        密集或粘连的细胞可能合并计数。
+      </p>
+    </section>
+  </div>
+
+  <!-- ================= 共定位分析 ================= -->
+  <div id="coloc-mode" hidden>
+    <section class="panel">
+      <h2 class="section-title">双通道共定位分析</h2>
+      <p id="colocNoImage" class="muted-text">请先到「单图分析」加载一张图片，这里会使用同一张图。</p>
+
+      <div class="fixed-roi">
+        <div class="fixed-inputs">
+          <span>通道 A
+            <select id="colocChA">
+              <option value="r" selected>红 R</option>
+              <option value="g">绿 G</option>
+              <option value="b">蓝 B</option>
+            </select>
+          </span>
+          <span>通道 B
+            <select id="colocChB">
+              <option value="r">红 R</option>
+              <option value="g" selected>绿 G</option>
+              <option value="b">蓝 B</option>
+            </select>
+          </span>
+          <span>A 阈值<input type="number" id="colocThA" value="20" min="0" max="255"></span>
+          <span>B 阈值<input type="number" id="colocThB" value="20" min="0" max="255"></span>
+        </div>
+        <div class="fixed-inputs" style="margin-top:10px">
+          <span>线宽（取平均）<input type="number" id="colocLineW" value="1" min="1" max="21"></span>
+        </div>
+        <div class="btn-row" style="margin-top:12px">
+          <button id="colocWhole">分析整图</button>
+          <button id="colocLine" class="ghost">分析划线</button>
+          <button id="colocClear" class="ghost">清除划线</button>
+          <button id="colocExport" class="ghost">导出 CSV</button>
+        </div>
+      </div>
+
+      <div class="coloc-layout">
+        <div class="canvas-wrap">
+          <canvas id="colocCanvas" hidden></canvas>
+        </div>
+        <div class="scatter-box">
+          <div class="scatter-title" id="chartTitle">双通道强度剖面</div>
+          <canvas id="scatterCanvas" width="300" height="260"></canvas>
+          <p class="scatter-hint" id="chartHint">在图上拖动画一条线，查看两通道沿线强度曲线</p>
+        </div>
+      </div>
+
+      <div class="bg-info" id="colocResult" style="margin-top:12px">在图上拖动画一条线分析剖面，或直接分析整图</div>
+      <p class="formula-note">
+        划线：沿你画的线采样两通道强度，画出强度曲线。两条曲线峰谷一致、走势重合
+        说明该处共定位强。Pearson 系数 r ∈ [−1, 1] 是线上两通道的线性相关，
+        越接近 1 越强，负值倾向互斥。「线宽」大于 1 时会取垂直方向多个像素的平均，曲线更平滑。
+        整图分析则给出全图 Pearson、Manders M1/M2 和散点图。
+      </p>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <p>所有计算均在本地浏览器完成，图片不会上传到任何服务器。</p>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/utif@3.1.0/UTIF.js"></script>
+<script async src="https://docs.opencv.org/4.8.0/opencv.js"></script>
+<script src="app.js"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch((err) => {
+        console.warn('Service Worker 注册失败：', err);
+      });
+    });
+  }
+</script>
+</body>
+</html>
